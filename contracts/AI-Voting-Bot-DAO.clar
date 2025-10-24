@@ -8,6 +8,7 @@
 (define-constant ERR_ALREADY_VOTED (err u105))
 (define-constant ERR_INSUFFICIENT_REPUTATION (err u106))
 (define-constant ERR_NOT_DELEGATED (err u107))
+(define-constant ERR_PROPOSAL_CANCELLED (err u108))
 
 (define-constant MIN_REPUTATION u10)
 (define-constant VOTING_PERIOD u144)
@@ -50,6 +51,7 @@
     no-votes: uint,
     total-votes: uint,
     executed: bool,
+    cancelled: bool,
     min-threshold: uint
   }
 )
@@ -173,6 +175,7 @@
       no-votes: u0,
       total-votes: u0,
       executed: false,
+      cancelled: false,
       min-threshold: threshold
     })
     
@@ -189,6 +192,7 @@
     (bot-info (map-get? ai-bots caller))
     (vote-key {proposal-id: proposal-id, voter: caller})
   )
+    (asserts! (not (get cancelled proposal-info)) ERR_PROPOSAL_CANCELLED)
     (asserts! (< stacks-block-height (get end-height proposal-info)) ERR_VOTING_CLOSED)
     (asserts! (is-none (map-get? votes vote-key)) ERR_ALREADY_VOTED)
     
@@ -234,10 +238,28 @@
   )
 )
 
+(define-public (cancel-proposal (proposal-id uint))
+  (let (
+    (caller tx-sender)
+    (proposal-info (unwrap! (map-get? proposals proposal-id) ERR_NOT_FOUND))
+  )
+    (asserts! (or (is-eq caller (get proposer proposal-info)) (is-eq caller CONTRACT_OWNER)) ERR_NOT_AUTHORIZED)
+    (asserts! (< stacks-block-height (get end-height proposal-info)) ERR_VOTING_CLOSED)
+    (asserts! (not (get executed proposal-info)) ERR_INVALID_PROPOSAL)
+    (asserts! (not (get cancelled proposal-info)) ERR_PROPOSAL_CANCELLED)
+    
+    (map-set proposals proposal-id 
+      (merge proposal-info {cancelled: true})
+    )
+    (ok true)
+  )
+)
+
 (define-public (execute-proposal (proposal-id uint))
   (let (
     (proposal-info (unwrap! (map-get? proposals proposal-id) ERR_NOT_FOUND))
   )
+    (asserts! (not (get cancelled proposal-info)) ERR_PROPOSAL_CANCELLED)
     (asserts! (>= stacks-block-height (get end-height proposal-info)) ERR_VOTING_CLOSED)
     (asserts! (not (get executed proposal-info)) ERR_INVALID_PROPOSAL)
     
