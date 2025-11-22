@@ -9,14 +9,17 @@
 (define-constant ERR_INSUFFICIENT_REPUTATION (err u106))
 (define-constant ERR_NOT_DELEGATED (err u107))
 (define-constant ERR_PROPOSAL_CANCELLED (err u108))
+(define-constant ERR_AMENDMENT_LIMIT_REACHED (err u109))
 
 (define-constant MIN_REPUTATION u10)
+(define-constant MAX_AMENDMENTS u3)
 (define-constant VOTING_PERIOD u144)
 (define-constant MIN_QUORUM u50)
 
 (define-data-var next-proposal-id uint u0)
 (define-data-var total-members uint u0)
 (define-data-var total-bots uint u0)
+(define-data-var next-amendment-id uint u0)
 
 (define-map members 
   principal 
@@ -52,7 +55,9 @@
     total-votes: uint,
     executed: bool,
     cancelled: bool,
-    min-threshold: uint
+    min-threshold: uint,
+    amendment-count: uint,
+    last-amended-height: uint
   }
 )
 
@@ -70,6 +75,20 @@
   {
     start-height: uint,
     is-active: bool
+  }
+)
+
+(define-map amendments
+  uint
+  {
+    proposal-id: uint,
+    amendment-number: uint,
+    old-title: (string-ascii 100),
+    old-description: (string-ascii 500),
+    new-title: (string-ascii 100),
+    new-description: (string-ascii 500),
+    amended-by: principal,
+    amendment-height: uint
   }
 )
 
@@ -176,7 +195,9 @@
       total-votes: u0,
       executed: false,
       cancelled: false,
-      min-threshold: threshold
+      min-threshold: threshold,
+      amendment-count: u0,
+      last-amended-height: u0
     })
     
     (var-set next-proposal-id (+ proposal-id u1))
@@ -235,6 +256,44 @@
         (ok true)
       )
     )
+  )
+)
+
+(define-public (amend-proposal (proposal-id uint) (new-title (string-ascii 100)) (new-description (string-ascii 500)))
+  (let (
+    (caller tx-sender)
+    (proposal-info (unwrap! (map-get? proposals proposal-id) ERR_NOT_FOUND))
+    (amendment-id (var-get next-amendment-id))
+    (current-amendment-count (get amendment-count proposal-info))
+  )
+    (asserts! (is-eq caller (get proposer proposal-info)) ERR_NOT_AUTHORIZED)
+    (asserts! (< stacks-block-height (get end-height proposal-info)) ERR_VOTING_CLOSED)
+    (asserts! (not (get executed proposal-info)) ERR_INVALID_PROPOSAL)
+    (asserts! (not (get cancelled proposal-info)) ERR_PROPOSAL_CANCELLED)
+    (asserts! (< current-amendment-count MAX_AMENDMENTS) ERR_AMENDMENT_LIMIT_REACHED)
+
+    (map-set amendments amendment-id {
+      proposal-id: proposal-id,
+      amendment-number: (+ current-amendment-count u1),
+      old-title: (get title proposal-info),
+      old-description: (get description proposal-info),
+      new-title: new-title,
+      new-description: new-description,
+      amended-by: caller,
+      amendment-height: stacks-block-height
+    })
+
+    (map-set proposals proposal-id 
+      (merge proposal-info {
+        title: new-title,
+        description: new-description,
+        amendment-count: (+ current-amendment-count u1),
+        last-amended-height: stacks-block-height
+      })
+    )
+
+    (var-set next-amendment-id (+ amendment-id u1))
+    (ok amendment-id)
   )
 )
 
@@ -359,11 +418,30 @@
   (map-get? delegations {delegator: delegator, delegate: delegate})
 )
 
+(define-read-only (get-amendment (amendment-id uint))
+  (map-get? amendments amendment-id)
+)
+
+(define-read-only (get-proposal-amendment-history (proposal-id uint))
+  (let (
+    (proposal-info (map-get? proposals proposal-id))
+  )
+    (match proposal-info
+      info (some {
+        amendment-count: (get amendment-count info),
+        last-amended-height: (get last-amended-height info)
+      })
+      none
+    )
+  )
+)
+
 (define-read-only (get-dao-stats)
   {
     total-members: (var-get total-members),
     total-bots: (var-get total-bots),
-    next-proposal-id: (var-get next-proposal-id)
+    next-proposal-id: (var-get next-proposal-id),
+    next-amendment-id: (var-get next-amendment-id)
   }
 )
 
